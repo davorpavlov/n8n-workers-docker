@@ -155,6 +155,33 @@ redis               redis:7-alpine                   running (healthy)
 
 To scale back down, simply change the number (e.g., `--scale n8n-worker=1`).
 
+
+### 🔹 Advanced: Persistent Scaling with Override File
+
+If you always want your stack to start with multiple workers (without typing `--scale` every time),
+you can create a **`docker-compose.override.yml`** file alongside your main `docker-compose.yml`.
+
+Example:
+
+```yaml
+version: "3.8"
+
+services:
+  n8n-worker:
+    deploy:
+      replicas: 3 # 👈 Default number of workers to run
+```
+
+With this setup, every time you run:
+
+```bash
+docker compose up -d
+```
+
+the stack will automatically start with **3 workers by default**.
+You can adjust the `replicas` value to match your workload.
+
+
 ## 💾 Data Persistence and Backups
 
 All critical data is stored in Docker-managed volumes on your host machine. The locations are typically found in `/var/lib/docker/volumes/`.
