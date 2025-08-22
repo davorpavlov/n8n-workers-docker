@@ -1,0 +1,6 @@
+version: "3.8"
+
+services:
+  n8n-worker:
+    deploy:
+      replicas: 2 # 👈 Default number of workers to run
