@@ -1,0 +1,153 @@
+version: "3.8"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432" # ⚠️ Exposes Postgres to host. Change or remove in production if not needed.
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-n8n}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme_in_env_file} # ⚠️ Must override in .env for production
+      POSTGRES_DB: ${POSTGRES_DB:-n8n}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-n8n} -d ${POSTGRES_DB:-n8n} -h 127.0.0.1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 25s
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server","--appendonly","yes","--save","60","1","--requirepass","${REDIS_PASSWORD:-changeme_in_env_file}"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a ${REDIS_PASSWORD:-changeme_in_env_file} -h 127.0.0.1 -p 6379 ping | grep -q PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  n8n:
+    image: docker.n8n.io/n8nio/n8n:latest
+    container_name: n8n-main
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      # Base URLs
+      - N8N_EDITOR_BASE_URL=${N8N_HOST:-http://localhost:5678}
+      - WEBHOOK_URL=${N8N_HOST:-http://localhost:5678}
+
+      # Database
+      - DB_TYPE=postgresdb
+      - DB_POSTGRESDB_HOST=postgres
+      - DB_POSTGRESDB_PORT=5432
+      - DB_POSTGRESDB_DATABASE=${POSTGRES_DB:-n8n}
+      - DB_POSTGRESDB_USER=${POSTGRES_USER:-n8n}
+      - DB_POSTGRESDB_PASSWORD=${POSTGRES_PASSWORD:-changeme_in_env_file}
+
+      # Encryption key (⚠️ MUST be set in .env)
+      - N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY}
+
+      # Security / telemetry
+      - N8N_BASIC_AUTH_ACTIVE=false # ⚠️ Consider enabling in production if behind public access
+      - N8N_PERSONALIZATION_ENABLED=false
+      - N8N_VERSION_NOTIFICATIONS_ENABLED=false
+      - N8N_DIAGNOSTICS_ENABLED=false
+
+      # Execution mode (workers)
+      - EXECUTIONS_MODE=queue
+      - OFFLOAD_MANUAL_EXECUTIONS_TO_WORKERS=true
+
+      # Execution data pruning
+      - EXECUTIONS_DATA_PRUNE=true
+      - EXECUTIONS_DATA_MAX_AGE=336 # in hours (14 days)
+
+      # Redis queue settings
+      - QUEUE_BULL_REDIS_HOST=redis
+      - QUEUE_BULL_REDIS_PORT=6379
+      - QUEUE_BULL_REDIS_PASSWORD=${REDIS_PASSWORD:-changeme_in_env_file}
+      - QUEUE_BULL_REDIS_USERNAME=default
+
+      # Timezone
+      - GENERIC_TIMEZONE=${GENERIC_TIMEZONE:-Europe/Zagreb}
+      - TZ=${GENERIC_TIMEZONE:-Europe/Zagreb}
+
+      # Memory management
+      - NODE_OPTIONS=--max_old_space_size=${N8N_MAX_MEMORY:-8192}
+
+      # Security hardening
+      - N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS=true
+
+      # Enables runners (recommended for scaling)
+      - N8N_RUNNERS_ENABLED=true
+
+    volumes:
+      - n8n_data:/home/node/.n8n
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:5678/healthz || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  n8n-worker:
+    image: docker.n8n.io/n8nio/n8n:latest
+    command: worker
+    container_name: n8n-worker # ⚠️ If scaling workers, remove this line to avoid container name conflicts
+    restart: unless-stopped
+    depends_on:
+      n8n:
+        condition: service_healthy
+    environment:
+      - QUEUE_HEALTH_CHECK_ACTIVE=true
+
+      # Database
+      - DB_TYPE=postgresdb
+      - DB_POSTGRESDB_HOST=postgres
+      - DB_POSTGRESDB_PORT=5432
+      - DB_POSTGRESDB_DATABASE=${POSTGRES_DB:-n8n}
+      - DB_POSTGRESDB_USER=${POSTGRES_USER:-n8n}
+      - DB_POSTGRESDB_PASSWORD=${POSTGRES_PASSWORD:-changeme_in_env_file}
+
+      # Queue execution
+      - EXECUTIONS_MODE=queue
+      - QUEUE_BULL_REDIS_HOST=redis
+      - QUEUE_BULL_REDIS_PORT=6379
+      - QUEUE_BULL_REDIS_PASSWORD=${REDIS_PASSWORD:-changeme_in_env_file}
+      - QUEUE_BULL_REDIS_USERNAME=default
+
+      # Encryption key (⚠️ must match main n8n)
+      - N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY}
+
+      # Timezone
+      - GENERIC_TIMEZONE=${GENERIC_TIMEZONE:-Europe/Zagreb}
+      - TZ=${GENERIC_TIMEZONE:-Europe/Zagreb}
+
+      # Memory
+      - NODE_OPTIONS=--max_old_space_size=${N8N_MAX_MEMORY:-8192}
+
+      # Security hardening
+      - N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS=true
+
+      - N8N_RUNNERS_ENABLED=true
+    healthcheck:
+      # Worker does not expose HTTP endpoint, so we just exit 0 to mark healthy
+      test: ["CMD", "/usr/local/bin/node", "-e", "process.exit(0)"]
+      interval: 30s
+      timeout: 5s
+      retries: 10
+    volumes:
+      - n8n_data:/home/node/.n8n
+
+volumes:
+  postgres_data:
+  redis_data:
+  n8n_data:
